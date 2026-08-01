@@ -14,82 +14,108 @@ jobs:
         env:
           LINUX_PASSWORD: ${{ secrets.LINUX_PASSWORD }}
         run: |
-          sudo useradd -m -s /bin/bash syedsharafmehdi || true
-          echo "syedsharafmehdi:$LINUX_PASSWORD" | sudo chpasswd
+          set -e
+
+          if ! id syedsharafmehdi >/dev/null 2>&1; then
+            sudo useradd -m -s /bin/bash syedsharafmehdi
+          fi
+
+          echo "syedsharafmehdi:${LINUX_PASSWORD}" | sudo chpasswd
+
           sudo usermod -aG sudo syedsharafmehdi
+
+      - name: Configure Passwordless sudo
+        run: |
+          echo "syedsharafmehdi ALL=(ALL) NOPASSWD:ALL" | \
+            sudo tee /etc/sudoers.d/syedsharafmehdi >/dev/null
+
+          sudo chmod 440 /etc/sudoers.d/syedsharafmehdi
+
+          sudo visudo -cf /etc/sudoers.d/syedsharafmehdi
 
       - name: Install OpenSSH Server
         run: |
           sudo apt-get update
+
           sudo apt-get install -y openssh-server
 
           sudo systemctl enable ssh
-          sudo systemctl start ssh
+
+          sudo systemctl restart ssh
+
+      - name: Configure SSH
+        run: |
+          sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+          sudo systemctl restart ssh
 
       - name: Install Tailscale 1.82.0
         run: |
-          curl -fsSL \
-          https://pkgs.tailscale.com/stable/tailscale_1.82.0_amd64.tgz \
-          -o tailscale.tgz
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg \
+            | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
 
-          tar xzf tailscale.tgz
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list \
+            | sudo tee /etc/apt/sources.list.d/tailscale.list
 
-          sudo cp tailscale_1.82.0_amd64/tailscale /usr/local/bin/
-          sudo cp tailscale_1.82.0_amd64/tailscaled /usr/local/bin/
+          sudo apt-get update
 
-          sudo mkdir -p /var/lib/tailscale
+          sudo apt-get install -y tailscale=1.82.0
 
-          sudo nohup tailscaled \
-            --state=/var/lib/tailscale/tailscaled.state \
-            >/tmp/tailscaled.log 2>&1 &
-
-      - name: Connect to Tailscale
+      - name: Start Tailscale
         env:
           TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
+          sudo systemctl enable tailscaled
+
+          sudo systemctl start tailscaled
+
           sudo tailscale up \
-            --authkey="$TS_AUTH_KEY" \
+            --authkey="${TS_AUTH_KEY}" \
             --hostname="gh-runner-${GITHUB_RUN_ID}" \
             --accept-routes \
             --reset
 
           for i in {1..20}; do
+
             TS_IP=$(tailscale ip -4 2>/dev/null | head -1)
 
             if [ -n "$TS_IP" ]; then
-              echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-              break
+              echo "TAILSCALE_IP=$TS_IP" >> "$GITHUB_ENV"
+              exit 0
             fi
 
             sleep 3
           done
 
-          if [ -z "$TS_IP" ]; then
-            echo "Failed to obtain Tailscale IP."
-            exit 1
-          fi
+          echo "Unable to obtain Tailscale IP"
+
+          exit 1
 
       - name: Verify SSH
         run: |
-          sudo systemctl status ssh
+          sudo systemctl status ssh --no-pager
 
           ss -tln
+
+          sudo tailscale status
 
       - name: Connection Information
         run: |
           echo ""
-          echo "=============================="
-          echo "Ubuntu SSH Ready"
-          echo "=============================="
+          echo "==================================="
+          echo " Ubuntu SSH Ready"
+          echo "==================================="
           echo "Host     : $TAILSCALE_IP"
+          echo "Port     : 22"
           echo "Username : syedsharafmehdi"
           echo "Password : ${{ secrets.LINUX_PASSWORD }}"
-          echo "=============================="
+          echo "==================================="
 
       - name: Keep Runner Alive
         run: |
           while true
           do
-            echo "$(date) Runner alive."
+            echo "[$(date)] Runner alive."
             sleep 300
           done
