@@ -1,0 +1,95 @@
+name: Ubuntu SSH
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ubuntu-ssh:
+    name: Ubuntu SSH via Tailscale
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Create User
+        env:
+          LINUX_PASSWORD: ${{ secrets.LINUX_PASSWORD }}
+        run: |
+          sudo useradd -m -s /bin/bash syedsharafmehdi || true
+          echo "syedsharafmehdi:$LINUX_PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo syedsharafmehdi
+
+      - name: Install OpenSSH Server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+
+      - name: Install Tailscale 1.82.0
+        run: |
+          curl -fsSL \
+          https://pkgs.tailscale.com/stable/tailscale_1.82.0_amd64.tgz \
+          -o tailscale.tgz
+
+          tar xzf tailscale.tgz
+
+          sudo cp tailscale_1.82.0_amd64/tailscale /usr/local/bin/
+          sudo cp tailscale_1.82.0_amd64/tailscaled /usr/local/bin/
+
+          sudo mkdir -p /var/lib/tailscale
+
+          sudo nohup tailscaled \
+            --state=/var/lib/tailscale/tailscaled.state \
+            >/tmp/tailscaled.log 2>&1 &
+
+      - name: Connect to Tailscale
+        env:
+          TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          sudo tailscale up \
+            --authkey="$TS_AUTH_KEY" \
+            --hostname="gh-runner-${GITHUB_RUN_ID}" \
+            --accept-routes \
+            --reset
+
+          for i in {1..20}; do
+            TS_IP=$(tailscale ip -4 2>/dev/null | head -1)
+
+            if [ -n "$TS_IP" ]; then
+              echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+              break
+            fi
+
+            sleep 3
+          done
+
+          if [ -z "$TS_IP" ]; then
+            echo "Failed to obtain Tailscale IP."
+            exit 1
+          fi
+
+      - name: Verify SSH
+        run: |
+          sudo systemctl status ssh
+
+          ss -tln
+
+      - name: Connection Information
+        run: |
+          echo ""
+          echo "=============================="
+          echo "Ubuntu SSH Ready"
+          echo "=============================="
+          echo "Host     : $TAILSCALE_IP"
+          echo "Username : syedsharafmehdi"
+          echo "Password : ${{ secrets.LINUX_PASSWORD }}"
+          echo "=============================="
+
+      - name: Keep Runner Alive
+        run: |
+          while true
+          do
+            echo "$(date) Runner alive."
+            sleep 300
+          done
