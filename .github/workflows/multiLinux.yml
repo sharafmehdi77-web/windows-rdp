@@ -29,6 +29,26 @@ jobs:
 
           sudo usermod -aG sudo syedsharafmehdi
 
+      - name: Rename VM
+        run: |
+          NEW_HOSTNAME="syedsharafmehdi-$(openssl rand -hex 6)"
+
+          echo "NEW_HOSTNAME=$NEW_HOSTNAME" >> "$GITHUB_ENV"
+
+          echo "Changing hostname to: $NEW_HOSTNAME"
+
+          sudo hostnamectl set-hostname "$NEW_HOSTNAME"
+
+          if grep -q '^127\.0\.1\.1' /etc/hosts; then
+            sudo sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $NEW_HOSTNAME/" /etc/hosts
+          else
+            echo "127.0.1.1 $NEW_HOSTNAME" | sudo tee -a /etc/hosts >/dev/null
+          fi
+
+          echo "Hostname successfully changed:"
+          hostname
+          hostnamectl --static
+
       - name: Configure Passwordless sudo
         run: |
           echo "syedsharafmehdi ALL=(ALL) NOPASSWD:ALL" | \
@@ -77,7 +97,7 @@ jobs:
 
           sudo tailscale up \
             --authkey="${TS_AUTH_KEY}" \
-            --hostname="gh-runner-${{ matrix.instance }}-${GITHUB_RUN_ID}" \
+            --hostname="${NEW_HOSTNAME}" \
             --accept-routes \
             --reset
 
@@ -101,8 +121,16 @@ jobs:
         run: |
           sudo systemctl status ssh --no-pager
 
+          echo ""
+          echo "Hostname:"
+          hostname
+
+          echo ""
+          echo "Listening Ports:"
           ss -tln
 
+          echo ""
+          echo "Tailscale Status:"
           sudo tailscale status
 
       - name: Connection Information
@@ -111,7 +139,7 @@ jobs:
           echo "==================================="
           echo " Ubuntu SSH Ready"
           echo "==================================="
-          echo "Instance : ${{ matrix.instance }}"
+          echo "Hostname : $NEW_HOSTNAME"
           echo "Host     : $TAILSCALE_IP"
           echo "Port     : 22"
           echo "Username : syedsharafmehdi"
@@ -122,6 +150,6 @@ jobs:
         run: |
           while true
           do
-            echo "[$(date)] Runner ${{ matrix.instance }} alive."
+            echo "[$(date)] ${NEW_HOSTNAME} alive."
             sleep 300
           done
