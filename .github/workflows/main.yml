@@ -78,7 +78,7 @@ jobs:
       - name: Install Tailscale 1.82.0
         shell: powershell
         run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.102.3-amd64.msi"
           $installer = "$env:TEMP\tailscale.msi"
 
           Invoke-WebRequest -Uri $url -OutFile $installer
