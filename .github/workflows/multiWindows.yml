@@ -1,0 +1,122 @@
+name: Windows RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    name: Windows RDP ${{ matrix.vm }}
+    runs-on: windows-latest
+    timeout-minutes: 1440
+
+    strategy:
+      fail-fast: false
+      matrix:
+        vm: [1, 2, 3]
+
+    steps:
+      - name: Configure Remote Desktop
+        shell: powershell
+        run: |
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" `
+            -Value 0 `
+            -Force
+
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name "UserAuthentication" `
+            -Value 0 `
+            -Force
+
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name "SecurityLayer" `
+            -Value 0 `
+            -Force
+
+          netsh advfirewall firewall add rule `
+            name="RDP-Tailscale" `
+            dir=in `
+            action=allow `
+            protocol=TCP `
+            localport=3389
+
+          Restart-Service TermService -Force
+
+      - name: Create RDP User
+        shell: powershell
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          $username = "root"
+          $securePass = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
+
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name $username
+          }
+
+          New-LocalUser `
+            -Name $username `
+            -Password $securePass `
+            -AccountNeverExpires `
+            -PasswordNeverExpires
+
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+
+          "RDP_USERNAME=$username" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.102.3-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+
+          Start-Process msiexec.exe `
+            -ArgumentList "/i `"$installer`" /quiet /norestart" `
+            -Wait
+
+          Remove-Item $installer -Force
+
+      - name: Connect to Tailscale
+        shell: powershell
+        env:
+          TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $hostname = "gh-rdp-${{ matrix.vm }}-${{ github.run_id }}"
+
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey=$env:TS_AUTH_KEY `
+            --hostname=$hostname `
+            --reset
+
+          $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 |
+            Select-Object -First 1).Trim()
+
+          if (-not $tsIP) {
+              throw "Failed to obtain Tailscale IP."
+          }
+
+          "TAILSCALE_IP=$tsIP" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Connection Information
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host "Windows RDP ${{ matrix.vm }}"
+          Write-Host "========================================"
+          Write-Host "Address : $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "========================================"
+
+      - name: Keep Runner Alive
+        shell: powershell
+        run: |
+          while ($true) {
+              Write-Host "[$(Get-Date)] Runner ${{ matrix.vm }} alive."
+              Start-Sleep -Seconds 300
+          }
