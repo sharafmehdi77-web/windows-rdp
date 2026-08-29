@@ -7,7 +7,7 @@ jobs:
   secure-rdp:
     name: Windows RDP via Tailscale
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 3600
 
     steps:
       - name: Configure Remote Desktop
